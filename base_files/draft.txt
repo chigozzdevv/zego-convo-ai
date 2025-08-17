@@ -1,0 +1,1867 @@
+How to Build a Conversational AI with ZEGOCLOUD
+Conversational AI is transforming how users interact with applications. From customer support to virtual assistants, the ability to have natural conversations with AI agents creates more engaging and intuitive user experiences.
+In this guide, we'll build a real-time conversational AI application using ZEGOCLOUD's AI Agent platform. Users will be able to chat with AI agents through text and voice, with real-time message streaming and natural voice responses.
+We'll create a clean, modern interface with smooth animations that handles both text-based conversations and voice interactions. The AI agent will respond intelligently with customizable personalities and voice characteristics.
+Prerequisites & Setup
+Before we start building, ensure you have:
+
+Node.js 18+ installed on your machine
+ZEGOCLOUD developer account - sign up here
+Basic knowledge of React, TypeScript, and Tailwind CSS
+Valid AppID and Server credentials from ZEGOCLOUD console
+
+Project Initialization
+Create a new Vite project with React and TypeScript:
+bashnpm create vite@latest conversational-ai -- --template react-ts
+cd conversational-ai
+Install all required dependencies:
+bash# Core dependencies
+npm install tailwindcss @tailwindcss/vite
+npm install framer-motion
+npm install zod
+npm install zego-express-engine-webrtc
+npm install axios
+npm install lucide-react
+
+# Dev dependencies
+npm install @types/node
+Tailwind CSS Configuration
+Configure Tailwind CSS with Vite by updating your configuration files:
+vite.config.ts
+typescriptimport { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  define: {
+    global: 'globalThis',
+  },
+})
+src/index.css
+css@import "tailwindcss";
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+Project Structure & Environment Setup
+Organize your project with a clean, scalable structure:
+src/
+├── components/
+│   ├── Chat/
+│   │   ├── ChatContainer.tsx
+│   │   ├── MessageList.tsx
+│   │   └── MessageInput.tsx
+│   ├── Voice/
+│   │   └── VoiceControls.tsx
+│   └── UI/
+│       ├── Button.tsx
+│       └── LoadingSpinner.tsx
+├── hooks/
+│   ├── useZego.ts
+│   └── useChat.ts
+├── services/
+│   ├── zego.ts
+│   └── api.ts
+├── types/
+│   └── index.ts
+├── utils/
+│   └── validation.ts
+└── App.tsx
+Environment Configuration
+Create your environment configuration:
+.env
+bashVITE_ZEGO_APP_ID=your_app_id
+VITE_ZEGO_SERVER=your_server_url
+VITE_API_BASE_URL=your_backend_api_url
+src/config.ts
+typescriptimport { z } from 'zod'
+
+const configSchema = z.object({
+  ZEGO_APP_ID: z.string().min(1),
+  ZEGO_SERVER: z.string().url(),
+  API_BASE_URL: z.string().url(),
+})
+
+const config = {
+  ZEGO_APP_ID: import.meta.env.VITE_ZEGO_APP_ID,
+  ZEGO_SERVER: import.meta.env.VITE_ZEGO_SERVER,
+  API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
+}
+
+export default configSchema.parse(config)
+Type Definitions & Validation
+Define the core types and validation schemas:
+src/types/index.ts
+typescriptexport interface Message {
+  id: string
+  content: string
+  sender: 'user' | 'ai'
+  timestamp: number
+  type: 'text' | 'voice'
+  isStreaming?: boolean
+}
+
+export interface AIAgent {
+  id: string
+  name: string
+  personality: string
+  voice: string
+}
+
+export interface ChatSession {
+  roomId: string
+  userId: string
+  agentInstanceId?: string
+  isActive: boolean
+}
+src/utils/validation.ts
+typescriptimport { z } from 'zod'
+
+export const messageSchema = z.object({
+  content: z.string().min(1).max(1000),
+  type: z.enum(['text', 'voice']),
+})
+
+export const sessionSchema = z.object({
+  roomId: z.string().min(1),
+  userId: z.string().min(1),
+})
+Building Core Components
+Reusable UI Components
+Start with clean, reusable UI components:
+src/components/UI/Button.tsx
+typescriptimport { motion } from 'framer-motion'
+import { forwardRef } from 'react'
+
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary' | 'ghost'
+  size?: 'sm' | 'md' | 'lg'
+  isLoading?: boolean
+}
+
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ variant = 'primary', size = 'md', isLoading, children, className = '', ...props }, ref) => {
+    const baseClasses = 'inline-flex items-center justify-center rounded-lg font-medium transition-colors focus:outline-none focus:ring-2'
+    
+    const variants = {
+      primary: 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500',
+      secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300 focus:ring-gray-500',
+      ghost: 'text-gray-600 hover:text-gray-900 hover:bg-gray-100 focus:ring-gray-500'
+    }
+    
+    const sizes = {
+      sm: 'px-3 py-2 text-sm',
+      md: 'px-4 py-2.5 text-sm',
+      lg: 'px-6 py-3 text-base'
+    }
+
+    return (
+      <motion.button
+        ref={ref}
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        className={`${baseClasses} ${variants[variant]} ${sizes[size]} ${className}`}
+        disabled={isLoading || props.disabled}
+        {...props}
+      >
+        {isLoading ? (
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent mr-2" />
+        ) : null}
+        {children}
+      </motion.button>
+    )
+  }
+)
+Message Components
+src/components/Chat/MessageBubble.tsx
+typescriptimport { motion } from 'framer-motion'
+import { Message } from '../../types'
+import { Volume2, User } from 'lucide-react'
+
+interface MessageBubbleProps {
+  message: Message
+  onPlayVoice?: (messageId: string) => void
+}
+
+export const MessageBubble = ({ message, onPlayVoice }: MessageBubbleProps) => {
+  const isUser = message.sender === 'user'
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}
+    >
+      <div className={`flex items-end space-x-2 max-w-xs lg:max-w-md ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
+        <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+          isUser ? 'bg-blue-600' : 'bg-gray-300'
+        }`}>
+          {isUser ? (
+            <User className="w-4 h-4 text-white" />
+          ) : (
+            <div className="w-4 h-4 bg-gradient-to-br from-purple-400 to-blue-600 rounded-full" />
+          )}
+        </div>
+        
+        <motion.div
+          className={`px-4 py-2.5 rounded-2xl ${
+            isUser 
+              ? 'bg-blue-600 text-white' 
+              : 'bg-gray-100 text-gray-900'
+          } ${message.isStreaming ? 'animate-pulse' : ''}`}
+          layout
+        >
+          <p className="text-sm leading-relaxed">{message.content}</p>
+          
+          {message.type === 'voice' && (
+            <button 
+              onClick={() => onPlayVoice?.(message.id)}
+              className="mt-2 flex items-center space-x-1 text-xs opacity-75 hover:opacity-100"
+            >
+              <Volume2 className="w-3 h-3" />
+              <span>Play</span>
+            </button>
+          )}
+        </motion.div>
+      </div>
+    </motion.div>
+  )
+}
+Message Input Component
+src/components/Chat/MessageInput.tsx
+typescriptimport { useState } from 'react'
+import { motion } from 'framer-motion'
+import { Send, Mic, MicOff } from 'lucide-react'
+import { Button } from '../UI/Button'
+import { messageSchema } from '../../utils/validation'
+
+interface MessageInputProps {
+  onSendMessage: (content: string, type: 'text' | 'voice') => void
+  isVoiceRecording: boolean
+  onToggleVoiceRecording: () => void
+  disabled?: boolean
+}
+
+export const MessageInput = ({ 
+  onSendMessage, 
+  isVoiceRecording, 
+  onToggleVoiceRecording,
+  disabled 
+}: MessageInputProps) => {
+  const [message, setMessage] = useState('')
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    const validation = messageSchema.safeParse({ content: message.trim(), type: 'text' })
+    if (!validation.success) return
+    
+    onSendMessage(message.trim(), 'text')
+    setMessage('')
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit(e as any)
+    }
+  }
+
+  return (
+    <motion.div 
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      className="border-t border-gray-200 p-4 bg-white"
+    >
+      <form onSubmit={handleSubmit} className="flex items-end space-x-3">
+        <div className="flex-1 min-w-0">
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Type your message..."
+            disabled={disabled}
+            rows={1}
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+            style={{ maxHeight: '120px' }}
+          />
+        </div>
+        
+        <Button
+          type="button"
+          variant="ghost"
+          size="md"
+          onClick={onToggleVoiceRecording}
+          className={isVoiceRecording ? 'text-red-600 bg-red-50' : ''}
+        >
+          <motion.div
+            animate={isVoiceRecording ? { scale: [1, 1.1, 1] } : {}}
+            transition={{ repeat: Infinity, duration: 1 }}
+          >
+            {isVoiceRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+          </motion.div>
+        </Button>
+        
+        <Button
+          type="submit"
+          disabled={!message.trim() || disabled}
+          size="md"
+        >
+          <Send className="w-4 h-4" />
+        </Button>
+      </form>
+    </motion.div>
+  )
+}
+ZEGO Integration & Services
+ZEGO Service Setup
+src/services/zego.ts
+typescriptimport { ZegoExpressEngine } from 'zego-express-engine-webrtc'
+import config from '../config'
+
+export class ZegoService {
+  private static instance: ZegoService
+  private zg: ZegoExpressEngine | null = null
+  private isInitialized = false
+
+  static getInstance(): ZegoService {
+    if (!ZegoService.instance) {
+      ZegoService.instance = new ZegoService()
+    }
+    return ZegoService.instance
+  }
+
+  async initialize(): Promise<void> {
+    if (this.isInitialized) return
+
+    this.zg = new ZegoExpressEngine(
+      parseInt(config.ZEGO_APP_ID), 
+      config.ZEGO_SERVER
+    )
+    
+    this.isInitialized = true
+  }
+
+  async joinRoom(roomId: string, userId: string): Promise<boolean> {
+    if (!this.zg) throw new Error('ZEGO not initialized')
+
+    try {
+      const result = await this.zg.loginRoom(roomId, { userID: userId, userName: userId })
+      return result
+    } catch (error) {
+      console.error('Failed to join room:', error)
+      return false
+    }
+  }
+
+  async leaveRoom(): Promise<void> {
+    if (this.zg) {
+      await this.zg.logoutRoom()
+    }
+  }
+
+  onRoomMessage(callback: (message: any) => void): void {
+    if (!this.zg) return
+    
+    this.zg.on('roomStreamUpdate', callback)
+  }
+
+  getEngine(): ZegoExpressEngine | null {
+    return this.zg
+  }
+}
+AI Agent API Service
+src/services/api.ts
+typescriptimport axios from 'axios'
+import config from '../config'
+
+const api = axios.create({
+  baseURL: config.API_BASE_URL,
+  timeout: 30000,
+})
+
+export const agentAPI = {
+  async startSession(roomId: string, userId: string): Promise<{ agentInstanceId: string }> {
+    const response = await api.post('/api/start', {
+      room_id: roomId,
+      user_id: userId,
+      user_stream_id: `${userId}_stream`,
+    })
+    return response.data
+  },
+
+  async sendMessage(agentInstanceId: string, message: string): Promise<void> {
+    await api.post('/api/send-message', {
+      agent_instance_id: agentInstanceId,
+      message,
+    })
+  },
+
+  async stopSession(agentInstanceId: string): Promise<void> {
+    await api.post('/api/stop', {
+      agent_instance_id: agentInstanceId,
+    })
+  },
+
+  async getToken(userId: string): Promise<{ token: string }> {
+    const response = await api.get(`/api/token?user_id=${userId}`)
+    return response.data
+  }
+}
+Chat Hook & Real-time Communication
+src/hooks/useChat.ts
+typescriptimport { useState, useCallback, useRef } from 'react'
+import { Message, ChatSession } from '../types'
+import { ZegoService } from '../services/zego'
+import { agentAPI } from '../services/api'
+
+export const useChat = () => {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [session, setSession] = useState<ChatSession | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isConnected, setIsConnected] = useState(false)
+  
+  const zegoService = useRef(ZegoService.getInstance())
+
+  const generateId = () => crypto.randomUUID()
+  const generateUserId = () => `user_${Math.random().toString(36).substr(2, 9)}`
+
+  const startSession = useCallback(async (): Promise<boolean> => {
+    setIsLoading(true)
+    try {
+      const roomId = `room_${Math.random().toString(36).substr(2, 9)}`
+      const userId = generateUserId()
+
+      await zegoService.current.initialize()
+      const joinResult = await zegoService.current.joinRoom(roomId, userId)
+      
+      if (!joinResult) throw new Error('Failed to join room')
+
+      const { agentInstanceId } = await agentAPI.startSession(roomId, userId)
+      
+      setSession({
+        roomId,
+        userId,
+        agentInstanceId,
+        isActive: true
+      })
+      
+      setIsConnected(true)
+      setupMessageHandlers()
+      
+      return true
+    } catch (error) {
+      console.error('Failed to start session:', error)
+      return false
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  const setupMessageHandlers = useCallback(() => {
+    zegoService.current.onRoomMessage((data: any) => {
+      if (data.Cmd === 4) { // LLM response
+        const aiMessage: Message = {
+          id: generateId(),
+          content: data.Data.Text,
+          sender: 'ai',
+          timestamp: Date.now(),
+          type: 'text',
+          isStreaming: !data.Data.EndFlag
+        }
+        
+        setMessages(prev => {
+          const existing = prev.find(m => m.id === data.Data.MessageId)
+          if (existing) {
+            return prev.map(m => 
+              m.id === data.Data.MessageId 
+                ? { ...m, content: data.Data.Text, isStreaming: !data.Data.EndFlag }
+                : m
+            )
+          }
+          return [...prev, { ...aiMessage, id: data.Data.MessageId }]
+        })
+      }
+    })
+  }, [])
+
+  const sendMessage = useCallback(async (content: string, type: 'text' | 'voice' = 'text') => {
+    if (!session?.agentInstanceId) return
+
+    const userMessage: Message = {
+      id: generateId(),
+      content,
+      sender: 'user',
+      timestamp: Date.now(),
+      type
+    }
+    
+    setMessages(prev => [...prev, userMessage])
+    
+    try {
+      await agentAPI.sendMessage(session.agentInstanceId, content)
+    } catch (error) {
+      console.error('Failed to send message:', error)
+    }
+  }, [session])
+
+  const endSession = useCallback(async () => {
+    if (!session) return
+    
+    try {
+      if (session.agentInstanceId) {
+        await agentAPI.stopSession(session.agentInstanceId)
+      }
+      await zegoService.current.leaveRoom()
+      
+      setSession(null)
+      setIsConnected(false)
+      setMessages([])
+    } catch (error) {
+      console.error('Failed to end session:', error)
+    }
+  }, [session])
+
+  return {
+    messages,
+    session,
+    isLoading,
+    isConnected,
+    startSession,
+    sendMessage,
+    endSession
+  }
+}
+Main Chat Container
+src/components/Chat/ChatContainer.tsx
+typescriptimport { useEffect, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { MessageBubble } from './MessageBubble'
+import { MessageInput } from './MessageInput'
+import { Button } from '../UI/Button'
+import { useChat } from '../../hooks/useChat'
+import { Phone, PhoneOff } from 'lucide-react'
+
+export const ChatContainer = () => {
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const { messages, isLoading, isConnected, startSession, sendMessage, endSession } = useChat()
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
+
+  const handleStartChat = async () => {
+    const success = await startSession()
+    if (success) {
+      sendMessage("Hello! I'd like to start chatting with you.", 'text')
+    }
+  }
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="flex flex-col h-screen bg-gray-50"
+    >
+      {/* Header */}
+      <motion.div 
+        initial={{ y: -20 }}
+        animate={{ y: 0 }}
+        className="bg-white border-b border-gray-200 px-6 py-4"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900">AI Assistant</h1>
+            <p className="text-sm text-gray-500">
+              {isConnected ? 'Connected and ready to chat' : 'Ready to start conversation'}
+            </p>
+          </div>
+          
+          {isConnected ? (
+            <Button onClick={endSession} variant="secondary" size="sm">
+              <PhoneOff className="w-4 h-4 mr-2" />
+              End Chat
+            </Button>
+          ) : (
+            <Button onClick={handleStartChat} isLoading={isLoading} size="sm">
+              <Phone className="w-4 h-4 mr-2" />
+              Start Chat
+            </Button>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-6">
+        <AnimatePresence mode="popLayout">
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))}
+        </AnimatePresence>
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      {isConnected && (
+        <MessageInput 
+          onSendMessage={sendMessage}
+          isVoiceRecording={false}
+          onToggleVoiceRecording={() => {}}
+          disabled={!isConnected}
+        />
+      )}
+    </motion.div>
+  )
+}
+Main Application
+src/App.tsx
+typescriptimport { ChatContainer } from './components/Chat/ChatContainer'
+
+function App() {
+  return (
+    <div className="w-full h-screen">
+      <ChatContainer />
+    </div>
+  )
+}
+
+export default App
+Testing Your Conversational AI
+Start your development server:
+bashnpm run dev
+Test the application:
+
+Environment Check: Verify your ZEGO credentials are properly configured
+Connection Test: Click "Start Chat" and confirm the AI agent joins
+Text Conversation: Send messages and verify AI responses appear with streaming
+Real-time Updates: Check that messages appear immediately without page refresh
+Session Management: Test ending and restarting chat sessions
+
+Next Steps & Enhancements
+Your conversational AI is now functional with text-based interactions. Consider these enhancements:
+
+Voice Integration: Add speech recognition for voice input and TTS for AI responses
+Digital Human: Integrate ZEGO's digital human capabilities for visual AI avatars
+Memory Persistence: Store conversation history across sessions
+Custom AI Personalities: Allow users to choose different AI agent personalities
+Multi-language Support: Implement internationalization for global users
+
+The foundation you've built provides a solid base for these advanced features. The modular component structure and clean service layer make extending functionality straightforward.
+Your users now have access to intelligent, real-time conversations with AI agents that respond naturally and immediately to their inputs.RetrySChello, please, I will like we include voice and memory persistence, not just text, so we can have text box and then mic button or so or which ever way you think is better or so. And then, please the step explanations should be a bit detailed. Like, say what we'll be doing in the step and what the code attached does, don't repeat the same message construct over and over again. It shouldn't read too generic, be creative. The UI should be functional and work very well. You can use black and white as the color or even blue, just something nice. PleaseEditStrategized comprehensive guide enhancement with voice and memory features.3sThe user wants me to enhance the guide with:
+
+Voice functionality (speech recognition + TTS)
+Memory persistence across sessions
+More detailed step explanations that explain what we're doing and what the code accomplishes
+Less repetitive messaging
+Better UI design with nice colors (black/white/blue theme)
+Functional UI that works well
+
+I need to rewrite the guide with these improvements:
+
+Add voice recording, speech recognition, and TTS playback
+Add localStorage for conversation persistence
+Make step explanations more detailed and specific
+Create a more sophisticated UI design
+Add proper voice controls and audio handling
+Include memory management between sessions
+
+Let me structure this better with more detailed explanations and enhanced functionality.How to Build a Conversational AI with Voice & Memory
+Building a conversational AI that remembers past interactions and supports natural voice communication creates truly engaging user experiences. Today's users expect AI assistants to maintain context across sessions and respond through both text and speech.
+In this comprehensive guide, we'll create a sophisticated conversational AI using ZEGOCLOUD's AI Agent platform. Our application will feature persistent memory, real-time voice recording with speech recognition, AI voice responses, and a sleek interface that adapts to user preferences.
+The final result will be an AI assistant that remembers your conversations, speaks naturally, and provides seamless switching between text and voice interactions.
+Prerequisites & Project Foundation
+Before diving into development, ensure you have these essentials ready:
+
+Node.js 18+ with npm package manager
+ZEGOCLOUD developer account with valid credentials
+Modern browser supporting Web Speech API and audio recording
+Microphone access for voice input functionality
+
+Creating the Project Structure
+Initialize your project with a robust foundation that supports advanced features:
+bashnpm create vite@latest ai-voice-assistant -- --template react-ts
+cd ai-voice-assistant
+Install the comprehensive dependency stack we'll need:
+bash# Core React and build tools
+npm install tailwindcss @tailwindcss/vite
+npm install framer-motion zod
+npm install zego-express-engine-webrtc axios
+npm install lucide-react
+
+# Voice and audio processing
+npm install react-speech-kit
+npm install @types/dom-speech-recognition
+
+# Development dependencies
+npm install @types/node
+This setup provides us with everything needed for voice processing, real-time communication, form validation, smooth animations, and a modern development experience.
+Advanced Configuration & Environment Setup
+Configure your development environment with production-ready settings that support voice features and persistent storage.
+Tailwind Configuration with Design System
+tailwind.config.js
+javascript/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        primary: {
+          50: '#eff6ff',
+          500: '#3b82f6',
+          600: '#2563eb',
+          700: '#1d4ed8',
+          900: '#1e3a8a',
+        },
+        gray: {
+          50: '#f8fafc',
+          100: '#f1f5f9',
+          200: '#e2e8f0',
+          300: '#cbd5e1',
+          400: '#94a3b8',
+          500: '#64748b',
+          600: '#475569',
+          700: '#334155',
+          800: '#1e293b',
+          900: '#0f172a',
+        }
+      },
+      animation: {
+        'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        'bounce-gentle': 'bounce 1s infinite',
+      }
+    },
+  },
+  plugins: [],
+}
+Vite Configuration for Voice Features
+vite.config.ts
+typescriptimport { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  define: {
+    global: 'globalThis',
+  },
+  server: {
+    https: false, // Enable for production voice features
+    host: true,
+  },
+  optimizeDeps: {
+    include: ['zego-express-engine-webrtc'],
+  }
+})
+Environment Configuration with Validation
+src/config.ts
+typescriptimport { z } from 'zod'
+
+const configSchema = z.object({
+  ZEGO_APP_ID: z.string().min(1, 'ZEGO App ID is required'),
+  ZEGO_SERVER: z.string().url('Valid ZEGO server URL required'),
+  API_BASE_URL: z.string().url('Valid API base URL required'),
+})
+
+const rawConfig = {
+  ZEGO_APP_ID: import.meta.env.VITE_ZEGO_APP_ID,
+  ZEGO_SERVER: import.meta.env.VITE_ZEGO_SERVER,
+  API_BASE_URL: import.meta.env.VITE_API_BASE_URL,
+}
+
+export const config = configSchema.parse(rawConfig)
+
+// Storage keys for persistent memory
+export const STORAGE_KEYS = {
+  CONVERSATIONS: 'ai_conversations',
+  USER_PREFERENCES: 'ai_user_preferences',
+  SESSION_HISTORY: 'ai_session_history',
+} as const
+This configuration ensures environment variables are validated at startup and provides organized storage keys for our memory persistence system.
+Type System & Voice Integration Models
+Define comprehensive types that support both text and voice interactions with memory persistence.
+src/types/index.ts
+typescriptexport interface VoiceMessage extends Omit<Message, 'type'> {
+  type: 'voice'
+  audioUrl?: string
+  duration?: number
+  transcript: string
+}
+
+export interface TextMessage extends Omit<Message, 'type'> {
+  type: 'text'
+}
+
+export type Message = {
+  id: string
+  content: string
+  sender: 'user' | 'ai'
+  timestamp: number
+  isStreaming?: boolean
+} & ({ type: 'text' } | { type: 'voice'; audioUrl?: string; duration?: number; transcript: string })
+
+export interface ConversationMemory {
+  id: string
+  title: string
+  messages: Message[]
+  createdAt: number
+  updatedAt: number
+  metadata: {
+    totalMessages: number
+    lastAIResponse: string
+    topics: string[]
+  }
+}
+
+export interface VoiceSettings {
+  isEnabled: boolean
+  autoPlay: boolean
+  speechRate: number
+  speechPitch: number
+  preferredVoice?: string
+}
+
+export interface ChatSession {
+  roomId: string
+  userId: string
+  agentInstanceId?: string
+  isActive: boolean
+  conversationId?: string
+  voiceSettings: VoiceSettings
+}
+
+export interface AIAgent {
+  id: string
+  name: string
+  personality: string
+  voiceCharacteristics: {
+    language: 'en-US' | 'en-GB'
+    gender: 'male' | 'female'
+    speed: number
+    pitch: number
+  }
+}
+This type system provides full support for voice messages, conversation persistence, and user preferences while maintaining type safety throughout the application.
+Memory Persistence Service
+Build a sophisticated memory system that stores conversations locally and provides intelligent retrieval.
+src/services/memory.ts
+typescriptimport { ConversationMemory, Message } from '../types'
+import { STORAGE_KEYS } from '../config'
+
+class MemoryService {
+  private static instance: MemoryService
+  private conversations: Map<string, ConversationMemory> = new Map()
+
+  static getInstance(): MemoryService {
+    if (!MemoryService.instance) {
+      MemoryService.instance = new MemoryService()
+    }
+    return MemoryService.instance
+  }
+
+  constructor() {
+    this.loadFromStorage()
+  }
+
+  // Load all conversations from localStorage into memory
+  private loadFromStorage(): void {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.CONVERSATIONS)
+      if (stored) {
+        const conversations: ConversationMemory[] = JSON.parse(stored)
+        conversations.forEach(conv => {
+          this.conversations.set(conv.id, conv)
+        })
+      }
+    } catch (error) {
+      console.error('Failed to load conversations from storage:', error)
+    }
+  }
+
+  // Persist current conversations to localStorage
+  private saveToStorage(): void {
+    try {
+      const conversations = Array.from(this.conversations.values())
+      localStorage.setItem(STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations))
+    } catch (error) {
+      console.error('Failed to save conversations to storage:', error)
+    }
+  }
+
+  // Create a new conversation or retrieve existing one
+  createOrGetConversation(id?: string): ConversationMemory {
+    const conversationId = id || this.generateConversationId()
+    
+    if (this.conversations.has(conversationId)) {
+      return this.conversations.get(conversationId)!
+    }
+
+    const newConversation: ConversationMemory = {
+      id: conversationId,
+      title: 'New Conversation',
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      metadata: {
+        totalMessages: 0,
+        lastAIResponse: '',
+        topics: []
+      }
+    }
+
+    this.conversations.set(conversationId, newConversation)
+    this.saveToStorage()
+    return newConversation
+  }
+
+  // Add a new message to a conversation and update metadata
+  addMessage(conversationId: string, message: Message): void {
+    const conversation = this.conversations.get(conversationId)
+    if (!conversation) return
+
+    conversation.messages.push(message)
+    conversation.updatedAt = Date.now()
+    conversation.metadata.totalMessages++
+
+    if (message.sender === 'ai') {
+      conversation.metadata.lastAIResponse = message.content
+    }
+
+    // Update conversation title based on first user message
+    if (conversation.messages.length === 1 && message.sender === 'user') {
+      conversation.title = message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '')
+    }
+
+    this.saveToStorage()
+  }
+
+  // Retrieve conversation with all messages
+  getConversation(conversationId: string): ConversationMemory | null {
+    return this.conversations.get(conversationId) || null
+  }
+
+  // Get all conversations sorted by last update
+  getAllConversations(): ConversationMemory[] {
+    return Array.from(this.conversations.values())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  // Delete a conversation completely
+  deleteConversation(conversationId: string): void {
+    this.conversations.delete(conversationId)
+    this.saveToStorage()
+  }
+
+  private generateConversationId(): string {
+    return `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  }
+}
+
+export const memoryService = MemoryService.getInstance()
+This service handles all conversation persistence, providing methods to create, update, and retrieve conversations while maintaining metadata for enhanced user experience.
+Voice Processing System
+Create a comprehensive voice system that handles speech recognition, audio recording, and text-to-speech playback.
+src/services/voice.ts
+typescriptimport { VoiceSettings } from '../types'
+
+export class VoiceService {
+  private static instance: VoiceService
+  private recognition: SpeechRecognition | null = null
+  private synthesis: SpeechSynthesis
+  private isRecording = false
+  private mediaRecorder: MediaRecorder | null = null
+  private audioChunks: Blob[] = []
+
+  static getInstance(): VoiceService {
+    if (!VoiceService.instance) {
+      VoiceService.instance = new VoiceService()
+    }
+    return VoiceService.instance
+  }
+
+  constructor() {
+    this.synthesis = window.speechSynthesis
+    this.initializeSpeechRecognition()
+  }
+
+  // Initialize speech recognition with optimal settings
+  private initializeSpeechRecognition(): void {
+    if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+      this.recognition = new SpeechRecognition()
+      
+      this.recognition.continuous = false
+      this.recognition.interimResults = true
+      this.recognition.lang = 'en-US'
+      this.recognition.maxAlternatives = 1
+    }
+  }
+
+  // Start voice recording with real-time transcription
+  async startRecording(
+    onTranscript: (transcript: string, isFinal: boolean) => void,
+    onError?: (error: string) => void
+  ): Promise<boolean> {
+    if (!this.recognition) {
+      onError?.('Speech recognition not supported')
+      return false
+    }
+
+    try {
+      // Request microphone permission and start media recording
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      this.mediaRecorder = new MediaRecorder(stream)
+      this.audioChunks = []
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        this.audioChunks.push(event.data)
+      }
+
+      this.mediaRecorder.start()
+
+      // Configure speech recognition callbacks
+      this.recognition.onresult = (event) => {
+        let transcript = ''
+        let isFinal = false
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript
+          if (event.results[i].isFinal) {
+            isFinal = true
+          }
+        }
+
+        onTranscript(transcript, isFinal)
+      }
+
+      this.recognition.onerror = (event) => {
+        onError?.(`Speech recognition error: ${event.error}`)
+        this.stopRecording()
+      }
+
+      this.recognition.start()
+      this.isRecording = true
+      return true
+    } catch (error) {
+      onError?.(`Microphone access denied: ${error}`)
+      return false
+    }
+  }
+
+  // Stop recording and return audio blob
+  stopRecording(): Promise<Blob | null> {
+    return new Promise((resolve) => {
+      if (!this.isRecording || !this.mediaRecorder) {
+        resolve(null)
+        return
+      }
+
+      this.mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' })
+        resolve(audioBlob)
+        this.cleanup()
+      }
+
+      this.recognition?.stop()
+      this.mediaRecorder.stop()
+      this.isRecording = false
+    })
+  }
+
+  // Convert text to speech with customizable voice settings
+  speak(text: string, settings: VoiceSettings): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!settings.isEnabled) {
+        resolve()
+        return
+      }
+
+      // Cancel any ongoing speech
+      this.synthesis.cancel()
+
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.rate = settings.speechRate
+      utterance.pitch = settings.speechPitch
+      utterance.volume = 0.8
+
+      // Select preferred voice if available
+      if (settings.preferredVoice) {
+        const voices = this.synthesis.getVoices()
+        const voice = voices.find(v => v.name === settings.preferredVoice)
+        if (voice) utterance.voice = voice
+      }
+
+      utterance.onend = () => resolve()
+      utterance.onerror = (error) => reject(error)
+
+      this.synthesis.speak(utterance)
+    })
+  }
+
+  // Clean up audio resources
+  private cleanup(): void {
+    if (this.mediaRecorder?.stream) {
+      this.mediaRecorder.stream.getTracks().forEach(track => track.stop())
+    }
+    this.mediaRecorder = null
+    this.audioChunks = []
+  }
+
+  // Get available voices for user selection
+  getAvailableVoices(): SpeechSynthesisVoice[] {
+    return this.synthesis.getVoices()
+  }
+
+  get isCurrentlyRecording(): boolean {
+    return this.isRecording
+  }
+}
+
+export const voiceService = VoiceService.getInstance()
+This voice service provides complete audio functionality including real-time speech recognition, audio recording, and text-to-speech with customizable voice settings.
+Enhanced Chat Hook with Voice & Memory
+Build a comprehensive chat hook that integrates voice processing, memory persistence, and real-time communication.
+src/hooks/useChat.ts
+typescriptimport { useState, useCallback, useRef, useEffect } from 'react'
+import { Message, ChatSession, ConversationMemory, VoiceSettings } from '../types'
+import { ZegoService } from '../services/zego'
+import { agentAPI } from '../services/api'
+import { memoryService } from '../services/memory'
+import { voiceService } from '../services/voice'
+
+export const useChat = () => {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [session, setSession] = useState<ChatSession | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isConnected, setIsConnected] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [currentTranscript, setCurrentTranscript] = useState('')
+  const [conversation, setConversation] = useState<ConversationMemory | null>(null)
+  
+  const zegoService = useRef(ZegoService.getInstance())
+  const pendingVoiceResponse = useRef<string>('')
+
+  const defaultVoiceSettings: VoiceSettings = {
+    isEnabled: true,
+    autoPlay: true,
+    speechRate: 1.0,
+    speechPitch: 1.0,
+  }
+
+  // Initialize or restore conversation from memory
+  const initializeConversation = useCallback((conversationId?: string) => {
+    const conv = memoryService.createOrGetConversation(conversationId)
+    setConversation(conv)
+    setMessages(conv.messages)
+    return conv
+  }, [])
+
+  // Start a new chat session with voice support
+  const startSession = useCallback(async (existingConversationId?: string): Promise<boolean> => {
+    setIsLoading(true)
+    try {
+      const roomId = `room_${Math.random().toString(36).substr(2, 9)}`
+      const userId = `user_${Math.random().toString(36).substr(2, 9)}`
+
+      await zegoService.current.initialize()
+      const joinResult = await zegoService.current.joinRoom(roomId, userId)
+      
+      if (!joinResult) throw new Error('Failed to join room')
+
+      const { agentInstanceId } = await agentAPI.startSession(roomId, userId)
+      
+      const conv = initializeConversation(existingConversationId)
+      
+      const newSession: ChatSession = {
+        roomId,
+        userId,
+        agentInstanceId,
+        isActive: true,
+        conversationId: conv.id,
+        voiceSettings: defaultVoiceSettings
+      }
+      
+      setSession(newSession)
+      setIsConnected(true)
+      setupMessageHandlers()
+      
+      return true
+    } catch (error) {
+      console.error('Failed to start session:', error)
+      return false
+    } finally {
+      setIsLoading(false)
+    }
+  }, [initializeConversation])
+
+  // Handle real-time message streaming from AI
+  const setupMessageHandlers = useCallback(() => {
+    zegoService.current.onRoomMessage((data: any) => {
+      if (data.Cmd === 4 && conversation) { // LLM response
+        const messageId = data.Data.MessageId
+        const content = data.Data.Text
+        const isComplete = data.Data.EndFlag
+
+        setMessages(prev => {
+          const existing = prev.find(m => m.id === messageId)
+          
+          if (existing) {
+            // Update existing streaming message
+            return prev.map(m => 
+              m.id === messageId 
+                ? { ...m, content, isStreaming: !isComplete }
+                : m
+            )
+          } else {
+            // Create new AI message
+            const aiMessage: Message = {
+              id: messageId,
+              content,
+              sender: 'ai',
+              timestamp: Date.now(),
+              type: 'text',
+              isStreaming: !isComplete
+            }
+            return [...prev, aiMessage]
+          }
+        })
+
+        // When message is complete, save to memory and speak if enabled
+        if (isComplete && session?.voiceSettings.autoPlay) {
+          const finalMessage: Message = {
+            id: messageId,
+            content,
+            sender: 'ai',
+            timestamp: Date.now(),
+            type: 'text'
+          }
+          
+          memoryService.addMessage(conversation.id, finalMessage)
+          voiceService.speak(content, session.voiceSettings)
+        }
+      }
+    })
+  }, [conversation, session])
+
+  // Send text message with memory persistence
+  const sendTextMessage = useCallback(async (content: string) => {
+    if (!session?.agentInstanceId || !conversation) return
+
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      content,
+      sender: 'user',
+      timestamp: Date.now(),
+      type: 'text'
+    }
+    
+    setMessages(prev => [...prev, userMessage])
+    memoryService.addMessage(conversation.id, userMessage)
+    
+    try {
+      await agentAPI.sendMessage(session.agentInstanceId, content)
+    } catch (error) {
+      console.error('Failed to send message:', error)
+    }
+  }, [session, conversation])
+
+  // Start voice recording with real-time transcription
+  const startVoiceRecording = useCallback(async () => {
+    const success = await voiceService.startRecording(
+      (transcript, isFinal) => {
+        setCurrentTranscript(transcript)
+        if (isFinal && transcript.trim()) {
+          sendTextMessage(transcript)
+          setCurrentTranscript('')
+        }
+      },
+      (error) => {
+        console.error('Voice recording error:', error)
+        setIsRecording(false)
+      }
+    )
+
+    if (success) {
+      setIsRecording(true)
+    }
+  }, [sendTextMessage])
+
+  // Stop voice recording
+  const stopVoiceRecording = useCallback(async () => {
+    await voiceService.stopRecording()
+    setIsRecording(false)
+    setCurrentTranscript('')
+  }, [])
+
+  // Toggle voice recording state
+  const toggleVoiceRecording = useCallback(async () => {
+    if (isRecording) {
+      await stopVoiceRecording()
+    } else {
+      await startVoiceRecording()
+    }
+  }, [isRecording, startVoiceRecording, stopVoiceRecording])
+
+  // End session and cleanup
+  const endSession = useCallback(async () => {
+    if (!session) return
+    
+    try {
+      if (isRecording) {
+        await stopVoiceRecording()
+      }
+      
+      if (session.agentInstanceId) {
+        await agentAPI.stopSession(session.agentInstanceId)
+      }
+      await zegoService.current.leaveRoom()
+      
+      setSession(null)
+      setIsConnected(false)
+    } catch (error) {
+      console.error('Failed to end session:', error)
+    }
+  }, [session, isRecording, stopVoiceRecording])
+
+  return {
+    messages,
+    session,
+    conversation,
+    isLoading,
+    isConnected,
+    isRecording,
+    currentTranscript,
+    startSession,
+    sendTextMessage,
+    toggleVoiceRecording,
+    endSession,
+    initializeConversation
+  }
+}
+This enhanced hook provides complete chat functionality with voice recording, real-time transcription, memory persistence, and session management.
+Advanced UI Components
+Build sophisticated UI components that provide excellent user experience for voice and text interactions.
+Voice-Enabled Message Input
+src/components/Chat/VoiceMessageInput.tsx
+typescriptimport { useState, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Send, Mic, MicOff, Volume2, VolumeX } from 'lucide-react'
+import { Button } from '../UI/Button'
+
+interface VoiceMessageInputProps {
+  onSendMessage: (content: string) => void
+  isRecording: boolean
+  onToggleRecording: () => void
+  currentTranscript: string
+  isConnected: boolean
+  voiceEnabled: boolean
+  onToggleVoice: () => void
+}
+
+export const VoiceMessageInput = ({ 
+  onSendMessage, 
+  isRecording, 
+  onToggleRecording,
+  currentTranscript,
+  isConnected,
+  voiceEnabled,
+  onToggleVoice
+}: VoiceMessageInputProps) => {
+  const [message, setMessage] = useState('')
+  const [isFocused, setIsFocused] = useState(false)
+
+  // Auto-resize textarea based on content
+  useEffect(() => {
+    const textarea = document.getElementById('message-input') as HTMLTextAreaElement
+    if (textarea) {
+      textarea.style.height = 'auto'
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
+    }
+  }, [message])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!message.trim() || !isConnected) return
+    
+    onSendMessage(message.trim())
+    setMessage('')
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit(e as any)
+    }
+  }
+
+  return (
+    <motion.div 
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      className="bg-white border-t border-gray-200 p-4"
+    >
+      {/* Voice transcript display */}
+      <AnimatePresence>
+        {(isRecording || currentTranscript) && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200"
+          >
+            <div className="flex items-center space-x-2">
+              <motion.div
+                animate={isRecording ? { scale: [1, 1.2, 1] } : {}}
+                transition={{ repeat: Infinity, duration: 1.5 }}
+                className="flex-shrink-0"
+              >
+                <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-red-500' : 'bg-blue-500'}`} />
+              </motion.div>
+              <p className="text-sm text-blue-700 flex-1">
+                {currentTranscript || (isRecording ? 'Listening...' : 'Processing speech...')}
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Input form */}
+      <form onSubmit={handleSubmit} className="flex items-end space-x-3">
+        <div className="flex-1 min-w-0">
+          <div className={`relative rounded-xl border-2 transition-colors duration-200 ${
+            isFocused ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-gray-50'
+          }`}>
+            <textarea
+              id="message-input"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyPress={handleKeyPress}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              placeholder={isRecording ? "Recording..." : "Type your message or use voice..."}
+              disabled={!isConnected || isRecording}
+              rows={1}
+              className="w-full px-4 py-3 bg-transparent border-none focus:outline-none resize-none placeholder-gray-500"
+              style={{ maxHeight: '120px' }}
+            />
+            
+            {/* Character counter for long messages */}
+            {message.length > 800 && (
+              <div className="absolute bottom-2 right-2 text-xs text-gray-400">
+                {message.length}/1000
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Voice controls */}
+        <div className="flex items-center space-x-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            onClick={onToggleVoice}
+            className="text-gray-600 hover:text-gray-900"
+            title={voiceEnabled ? "Disable voice" : "Enable voice"}
+          >
+            {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            onClick={onToggleRecording}
+            disabled={!isConnected}
+            className={`transition-all duration-200 ${
+              isRecording 
+                ? 'bg-red-500 text-white hover:bg-red-600 shadow-lg' 
+                : 'text-gray-600 hover:text-blue-600 hover:bg-blue-50'
+            }`}
+          >
+            <motion.div
+              animate={isRecording ? { scale: [1, 1.1, 1] } : {}}
+              transition={{ repeat: Infinity, duration: 1 }}
+            >
+              {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </motion.div>
+          </Button>
+        </div>
+
+        {/* Send button */}
+        <Button
+          type="submit"
+          disabled={!message.trim() || !isConnected || isRecording}
+          size="md"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-6"
+        >
+          <Send className="w-4 h-4" />
+        </Button>
+      </form>
+    </motion.div>
+  )
+}
+Enhanced Message Display
+src/components/Chat/MessageBubble.tsx
+typescriptimport { motion } from 'framer-motion'
+import { Message } from '../../types'
+import { Volume2, User, Bot, Clock } from 'lucide-react'
+
+interface MessageBubbleProps {
+  message: Message
+  onPlayVoice?: (messageId: string) => void
+  showTimestamp?: boolean
+}
+
+export const MessageBubble = ({ message, onPlayVoice, showTimestamp = false }: MessageBubbleProps) => {
+  const isUser = message.sender === 'user'
+  const isVoice = message.type === 'voice'
+  
+  const formatTime = (timestamp: number) => {
+    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-6 group`}
+    >
+      <div className={`flex items-end space-x-3 max-w-lg ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
+        {/* Avatar */}
+        <motion.div 
+          whileHover={{ scale: 1.05 }}
+          className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md ${
+            isUser 
+              ? 'bg-gradient-to-br from-blue-500 to-blue-600' 
+              : 'bg-gradient-to-br from-gray-700 to-gray-800'
+          }`}
+        >
+          {isUser ? (
+            <User className="w-5 h-5 text-white" />
+          ) : (
+            <Bot className="w-5 h-5 text-white" />
+          )}
+        </motion.div>
+        
+        {/* Message content */}
+        <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+          <motion.div
+            className={`px-5 py-3 rounded-2xl shadow-sm ${
+              isUser 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-white text-gray-900 border border-gray-200'
+            } ${message.isStreaming ? 'animate-pulse' : ''} ${
+              isVoice ? 'border-2 border-dashed border-purple-300' : ''
+            }`}
+            layout
+            whileHover={{ scale: 1.02 }}
+          >
+            {/* Voice message indicator */}
+            {isVoice && (
+              <div className={`flex items-center space-x-2 mb-2 ${
+                isUser ? 'text-blue-200' : 'text-purple-600'
+              }`}>
+                <Volume2 className="w-4 h-4" />
+                <span className="text-xs font-medium">Voice Message</span>
+                {message.duration && (
+                  <span className="text-xs opacity-75">{message.duration}s</span>
+                )}
+              </div>
+            )}
+            
+            {/* Message text */}
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">
+              {isVoice ? message.transcript : message.content}
+            </p>
+            
+            {/* Voice playback button */}
+            {isVoice && message.audioUrl && (
+              <button 
+                onClick={() => onPlayVoice?.(message.id)}
+                className={`mt-3 flex items-center space-x-2 text-xs transition-opacity duration-200 hover:opacity-100 ${
+                  isUser ? 'text-blue-200 opacity-75' : 'text-purple-600 opacity-75'
+                }`}
+              >
+                <Volume2 className="w-3 h-3" />
+                <span>Play Audio</span>
+              </button>
+            )}
+          </motion.div>
+          
+          {/* Timestamp */}
+          {showTimestamp && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className="flex items-center space-x-1 mt-1 text-xs text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <Clock className="w-3 h-3" />
+              <span>{formatTime(message.timestamp)}</span>
+            </motion.div>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+Memory Management Interface
+Create a conversation history interface that allows users to browse and resume past conversations.
+src/components/Memory/ConversationList.tsx
+typescriptimport { motion, AnimatePresence } from 'framer-motion'
+import { ConversationMemory } from '../../types'
+import { MessageSquare, Clock, Trash2 } from 'lucide-react'
+import { Button } from '../UI/Button'
+
+interface ConversationListProps {
+  conversations: ConversationMemory[]
+  onSelectConversation: (id: string) => void
+  onDeleteConversation: (id: string) => void
+  currentConversationId?: string
+}
+
+export const ConversationList = ({ 
+  conversations, 
+  onSelectConversation, 
+  onDeleteConversation,
+  currentConversationId 
+}: ConversationListProps) => {
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp)
+    const now = new Date()
+    const diffInHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60)
+    
+    if (diffInHours < 24) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    } else if (diffInHours < 24 * 7) {
+      return date.toLocaleDateString([], { weekday: 'short' })
+    } else {
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+    }
+  }
+
+  return (
+    <div className="w-80 bg-gray-50 border-r border-gray-200 flex flex-col">
+      {/* Header */}
+      <div className="p-4 border-b border-gray-200">
+        <h2 className="font-semibold text-gray-900 flex items-center">
+          <MessageSquare className="w-5 h-5 mr-2" />
+          Conversations
+        </h2>
+        <p className="text-sm text-gray-500 mt-1">{conversations.length} total</p>
+      </div>
+
+      {/* Conversation list */}
+      <div className="flex-1 overflow-y-auto">
+        <AnimatePresence>
+          {conversations.map((conv) => (
+            <motion.div
+              key={conv.id}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              whileHover={{ backgroundColor: '#f8fafc' }}
+              className={`p-4 border-b border-gray-100 cursor-pointer transition-colors ${
+                currentConversationId === conv.id ? 'bg-blue-50 border-blue-200' : ''
+              }`}
+              onClick={() => onSelectConversation(conv.id)}
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-medium text-gray-900 truncate mb-1">
+                    {conv.title}
+                  </h3>
+                  <p className="text-sm text-gray-600 line-clamp-2 mb-2">
+                    {conv.metadata.lastAIResponse || 'No messages yet'}
+                  </p>
+                  <div className="flex items-center space-x-3 text-xs text-gray-500">
+                    <span className="flex items-center">
+                      <MessageSquare className="w-3 h-3 mr-1" />
+                      {conv.metadata.totalMessages}
+                    </span>
+                    <span className="flex items-center">
+                      <Clock className="w-3 h-3 mr-1" />
+                      {formatDate(conv.updatedAt)}
+                    </span>
+                  </div>
+                </div>
+                
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteConversation(conv.id)
+                  }}
+                  className="text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
+Complete Main Application
+Bring everything together in a sophisticated application that showcases all features.
+src/App.tsx
+typescriptimport { useState, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { ChatContainer } from './components/Chat/ChatContainer'
+import { ConversationList } from './components/Memory/ConversationList'
+import { memoryService } from './services/memory'
+import { ConversationMemory } from './types'
+import { Plus, Menu, X } from 'lucide-react'
+import { Button } from './components/UI/Button'
+
+function App() {
+  const [conversations, setConversations] = useState<ConversationMemory[]>([])
+  const [currentConversationId, setCurrentConversationId] = useState<string>()
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+
+  useEffect(() => {
+    // Load conversations on app start
+    setConversations(memoryService.getAllConversations())
+  }, [])
+
+  const handleNewConversation = () => {
+    setCurrentConversationId(undefined)
+  }
+
+  const handleSelectConversation = (id: string) => {
+    setCurrentConversationId(id)
+    setSidebarOpen(false) // Close sidebar on mobile
+  }
+
+  const handleDeleteConversation = (id: string) => {
+    memoryService.deleteConversation(id)
+    setConversations(memoryService.getAllConversations())
+    if (currentConversationId === id) {
+      setCurrentConversationId(undefined)
+    }
+  }
+
+  const refreshConversations = () => {
+    setConversations(memoryService.getAllConversations())
+  }
+
+  return (
+    <div className="flex h-screen bg-gray-900">
+      {/* Mobile sidebar backdrop */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black bg-opacity-50 lg:hidden z-40"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <motion.div
+            initial={{ x: -320 }}
+            animate={{ x: 0 }}
+            exit={{ x: -320 }}
+            className="fixed left-0 top-0 h-full w-80 bg-white z-50 lg:relative lg:z-auto lg:translate-x-0 shadow-xl"
+          >
+            <div className="flex flex-col h-full">
+              {/* Sidebar header */}
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                <h1 className="text-xl font-bold text-gray-900">AI Assistant</h1>
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleNewConversation}
+                    className="text-blue-600 hover:bg-blue-50"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSidebarOpen(false)}
+                    className="lg:hidden"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Conversation list */}
+              <ConversationList
+                conversations={conversations}
+                onSelectConversation={handleSelectConversation}
+                onDeleteConversation={handleDeleteConversation}
+                currentConversationId={currentConversationId}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Main chat area */}
+      <div className="flex-1 flex flex-col">
+        {/* Mobile header */}
+        <div className="lg:hidden bg-white border-b border-gray-200 p-4 flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <Menu className="w-5 h-5" />
+          </Button>
+          <h1 className="font-semibold text-gray-900">AI Assistant</h1>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleNewConversation}
+            className="text-blue-600"
+          >
+            <Plus className="w-5 h-5" />
+          </Button>
+        </div>
+
+        {/* Chat container */}
+        <div className="flex-1">
+          <ChatContainer
+            conversationId={currentConversationId}
+            onConversationUpdate={refreshConversations}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default App
+Testing Your Voice-Enabled AI
+Launch your development server and test the complete system:
+bashnpm run dev
+Testing Checklist
+
+Memory Persistence: Start a conversation, refresh the page, and verify messages persist
+Voice Recording: Click the microphone button and speak - verify real-time transcription
+AI Voice Responses: Enable voice output and confirm AI responses are spoken aloud
+Conversation Management: Create multiple conversations and switch between them
+Responsive Design: Test on mobile devices for proper touch interactions
+Error Handling: Test with microphone denied permissions and network failures
+
+Your conversational AI now provides a complete experience with voice interaction, persistent memory, and an intuitive interface that rivals professional AI assistant applications.
+The combination of real-time voice processing, intelligent memory management, and smooth animations creates an engaging user experience that demonstrates the power of modern web technologies integrated with ZEGOCLOUD's AI capabilities.RetryClaude can make mistakes. Please double-check responses.Research Sonnet 4
